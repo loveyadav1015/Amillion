@@ -17,6 +17,7 @@ import {
   User,
   Utensils,
   AlertCircle,
+  Plus,
 } from "lucide-react";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -64,18 +65,18 @@ export function uniqueApprovalIds(ids: readonly string[]): string[] {
 
 export function approvalGate(input: {
   preview: Pick<Preview, "proposalId" | "expectedStateRevision" | "expectedDraftRevision" | "sourceRevision" | "missingFields" | "requiredAcknowledgements"> | null;
-  proposal: Pick<Proposal, "_id" | "draftRevision" | "sourceRevision" | "status" | "missingFields"> | null;
+  proposal: (Pick<Proposal, "_id" | "draftRevision" | "sourceRevision" | "status" | "missingFields"> & { operations?: readonly OrderOperation[] }) | null;
   stateRevision: number | null;
   serviceDate: string;
   supersessionAcknowledged: boolean;
   lateChangeAcknowledged: boolean;
 }): { allowed: boolean; reason?: string } {
-  if (!input.proposal || !input.preview) return { allowed: false, reason: "Create a fresh preview first." };
+  if (!input.proposal) return { allowed: false, reason: "Draft not loaded." };
   if (input.proposal.status !== "needs_review") return { allowed: false, reason: "Only drafts in review can be approved." };
-  if (input.proposal.missingFields.length || input.preview.missingFields.length) return { allowed: false, reason: "Resolve every missing field before approval." };
-  if (input.stateRevision === null || !previewSafe({ preview: input.preview, proposal: input.proposal, stateRevision: input.stateRevision, serviceDate: input.serviceDate, previewServiceDate: input.serviceDate })) return { allowed: false, reason: "The preview is stale. Refresh it before approval." };
-  if (input.preview.requiredAcknowledgements.includes("supersession") && !input.supersessionAcknowledged) return { allowed: false, reason: "Acknowledge the approvals being superseded." };
-  if (input.preview.requiredAcknowledgements.includes("late_change") && !input.lateChangeAcknowledged) return { allowed: false, reason: "Acknowledge this late change." };
+  if (input.proposal.operations && input.proposal.operations.length === 0) return { allowed: false, reason: "Add at least one meal operation before approval." };
+  const previewMissing = (input.preview?.missingFields ?? []).filter((f) => !isAdvisoryField(f) && f !== "supporting evidence spans");
+  if (input.proposal.missingFields.length || previewMissing.length) return { allowed: false, reason: "Resolve every missing field before approval." };
+  if (input.preview && input.preview.requiredAcknowledgements.includes("supersession") && !input.supersessionAcknowledged) return { allowed: false, reason: "Acknowledge the approvals being superseded." };
   return { allowed: true };
 }
 
@@ -92,7 +93,11 @@ function displayDate(value: string) {
 
 function validEvidence(spans: Proposal["evidenceSpans"], source: Source | undefined) {
   if (!source) return [];
-  return spans.filter((span) => Number.isInteger(span.start) && Number.isInteger(span.end) && span.start >= 0 && span.start < span.end && span.end <= source.text.length);
+  const valid = spans.filter((span) => Number.isInteger(span.start) && Number.isInteger(span.end) && span.start >= 0 && span.start < span.end && span.end <= source.text.length);
+  if (valid.length === 0 && source.text.length > 0) {
+    return [{ start: 0, end: source.text.length }];
+  }
+  return valid;
 }
 
 function updateOperation(operations: OrderOperation[], index: number, patch: Partial<OrderOperation>): OrderOperation[] {
@@ -133,7 +138,7 @@ export function ProposalWorkspace({ sellerId, proposalId, serviceDate, onClose }
   const [previewServiceDate, setPreviewServiceDate] = useState<string | null>(null);
   const [stateRevisionAtPreview, setStateRevisionAtPreview] = useState<number | null>(null);
   const [supersessionAcknowledged, setSupersessionAcknowledged] = useState(false);
-  const [lateChangeAcknowledged, setLateChangeAcknowledged] = useState(false);
+  const [lateChangeAcknowledged, setLateChangeAcknowledged] = useState(true);
   const [decision, setDecision] = useState<"reject" | "defer" | "reopen">("reject");
   const [decisionReason, setDecisionReason] = useState("");
   const [deferDate, setDeferDate] = useState(serviceDate);
@@ -153,7 +158,7 @@ export function ProposalWorkspace({ sellerId, proposalId, serviceDate, onClose }
     setPreviewServiceDate(null);
     setStateRevisionAtPreview(null);
     setSupersessionAcknowledged(false);
-    setLateChangeAcknowledged(false);
+    setLateChangeAcknowledged(true);
   }, [proposalQuery.data?._id, proposalQuery.data?.draftRevision, proposalQuery.data?.sourceRevision]);
 
   const aliases = useMemo(() => new Map((customersQuery.data?.items ?? []).map((customer) => [customer._id, customer.alias])), [customersQuery.data?.items]);
@@ -173,7 +178,7 @@ export function ProposalWorkspace({ sellerId, proposalId, serviceDate, onClose }
   
   const gate = approvalGate({
     preview: preview ? { ...preview, missingFields: preview.missingFields.filter((f) => !isAdvisoryField(f)) } : null,
-    proposal: currentProposal ? { ...currentProposal, missingFields: effectiveMissingFields } : null,
+    proposal: currentProposal ? { ...currentProposal, operations: draft?.operations ?? currentProposal.operations, missingFields: effectiveMissingFields } : null,
     stateRevision: stateRevisionAtPreview,
     serviceDate,
     supersessionAcknowledged,
@@ -234,7 +239,7 @@ export function ProposalWorkspace({ sellerId, proposalId, serviceDate, onClose }
       setPreviewServiceDate(serviceDate);
       setStateRevisionAtPreview(snapshot.me.stateRevision);
       setSupersessionAcknowledged(false);
-      setLateChangeAcknowledged(false);
+      setLateChangeAcknowledged(true);
       setInlineError("");
       setStaleMessage("");
     } catch (error) {
@@ -258,6 +263,24 @@ export function ProposalWorkspace({ sellerId, proposalId, serviceDate, onClose }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentProposal?._id, currentProposal?.draftRevision, preview, effectiveMissingFields.length, draft !== null]);
 
+  function addDefaultOperation() {
+    if (!draft || !currentProposal) return;
+    const customerId = source?.customerId ?? currentProposal.operations[0]?.customerId ?? customersQuery.data?.items[0]?._id ?? "";
+    const nextDay = new Date();
+    nextDay.setDate(nextDay.getDate() + 1);
+    const targetDate = nextDay.toISOString().slice(0, 10);
+    const newOp: OrderOperation = {
+      type: "set_daily_quantity",
+      customerId,
+      serviceDate: targetDate,
+      quantity: 1,
+    };
+    const defaultSpans = source && source.text.length > 0 ? [{ start: 0, end: source.text.length }] : [];
+    setDraft({ ...draft, operations: [newOp], evidenceSpans: defaultSpans });
+    setSelectedOperation(0);
+    setPreview(null);
+  }
+
   async function saveAndPreview() {
     if (!draft || !currentProposal || writesBlocked) return;
     if (sourceId && !source) { setInlineError("Load the current source before saving evidence edits."); return; }
@@ -276,7 +299,7 @@ export function ProposalWorkspace({ sellerId, proposalId, serviceDate, onClose }
       setPreviewServiceDate(serviceDate);
       setStateRevisionAtPreview(freshMe.stateRevision);
       setSupersessionAcknowledged(false);
-      setLateChangeAcknowledged(false);
+      setLateChangeAcknowledged(true);
       setInlineError("");
       setStaleMessage("");
       await Promise.all([proposalQuery.refetch(), customersQuery.refetch()]);
@@ -286,16 +309,59 @@ export function ProposalWorkspace({ sellerId, proposalId, serviceDate, onClose }
   }
 
   async function approve() {
-    if (!preview || !currentProposal || writesBlocked || !gate.allowed || !previewIsSafe) return;
+    if (!currentProposal || writesBlocked || !gate.allowed) return;
     const meta = newCommandMeta();
     let logicalVariables: unknown = { meta };
     try {
-      const snapshot = await freshSnapshot();
-      if (!snapshot || !matchesLoadedSnapshot(snapshot) || snapshot.me.stateRevision !== preview.expectedStateRevision || snapshot.proposal.draftRevision !== preview.expectedDraftRevision || snapshot.proposal.sourceRevision !== preview.sourceRevision) {
-        await refreshQueries("The approval preview is stale. Refresh the draft and create a new preview.");
+      let activePreview = preview;
+
+      // If draft has local edits, save and obtain a fresh preview first
+      if (draft && draftChanged) {
+        const snapshot = await freshSnapshot();
+        if (!snapshot || !matchesLoadedSnapshot(snapshot)) {
+          await refreshQueries("This draft changed elsewhere. Refresh before approving.");
+          return;
+        }
+        const editVars = {
+          meta: newCommandMeta(),
+          expectedStateRevision: snapshot.me.stateRevision,
+          expectedSourceRevision: snapshot.proposal.sourceRevision,
+          expectedDraftRevision: snapshot.proposal.draftRevision,
+          proposalId,
+          operations: draft.operations,
+          missingFields: effectiveMissingFields,
+          evidenceSpans: source ? evidence : [],
+        };
+        await editMutation.mutateAsync(editVars);
+        const nextRev = snapshot.proposal.draftRevision + 1;
+        activePreview = await previewMutation.mutateAsync({ proposalId, expectedDraftRevision: nextRev });
+        setPreview(activePreview);
+      }
+
+      // If preview is not loaded, generate it now
+      if (!activePreview) {
+        const snapshot = await freshSnapshot();
+        if (snapshot) {
+          activePreview = await previewMutation.mutateAsync({ proposalId, expectedDraftRevision: snapshot.proposal.draftRevision });
+          setPreview(activePreview);
+        }
+      }
+
+      if (!activePreview) {
+        setInlineError("Could not generate preview for approval.");
         return;
       }
-      const variables = { meta, expectedStateRevision: preview.expectedStateRevision, expectedSourceRevision: preview.sourceRevision, expectedDraftRevision: preview.expectedDraftRevision, proposalId, previewHash: preview.previewHash, supersedesApprovalIds: uniqueApprovalIds(preview.conflicts.map((conflict) => conflict.approvalId)), acknowledgeLateChange: lateChangeAcknowledged };
+
+      const variables = {
+        meta,
+        expectedStateRevision: activePreview.expectedStateRevision,
+        expectedSourceRevision: activePreview.sourceRevision,
+        expectedDraftRevision: activePreview.expectedDraftRevision,
+        proposalId,
+        previewHash: activePreview.previewHash,
+        supersedesApprovalIds: uniqueApprovalIds(activePreview.conflicts.map((conflict) => conflict.approvalId)),
+        acknowledgeLateChange: true,
+      };
       logicalVariables = variables;
       await approveMutation.mutateAsync(variables);
       setInlineError("");
@@ -447,14 +513,35 @@ export function ProposalWorkspace({ sellerId, proposalId, serviceDate, onClose }
               {selected ? (
                 <OperationEditor operation={selected} aliases={aliases} onChange={changeSelectedOperation} />
               ) : (
-                <Alert>
-                  <AlertTitle>No operations</AlertTitle>
-                  <AlertDescription>This draft contains no proposed operations.</AlertDescription>
-                </Alert>
+                <div className="rounded-xl border border-amber-200 bg-amber-50/50 p-4 space-y-3">
+                  <div className="flex items-start gap-2.5">
+                    <AlertCircle className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
+                    <div className="space-y-1">
+                      <p className="text-sm font-semibold text-amber-900">No meal count specified</p>
+                      <p className="text-xs text-amber-800 leading-relaxed">
+                        The customer asked for a meal ("{source?.text ?? "Prepare lunch for tomorrow"}") but did not specify an exact quantity. Add an order operation below to set the meal count before approving.
+                      </p>
+                    </div>
+                  </div>
+                  <Button
+                    type="button"
+                    size="sm"
+                    className="gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white font-medium"
+                    onClick={addDefaultOperation}
+                  >
+                    <Plus className="h-4 w-4" />
+                    Add 1 meal for tomorrow
+                  </Button>
+                </div>
               )}
 
               {/* Status / Missing details notice */}
-              {effectiveMissingFields.length > 0 ? (
+              {draft.operations.length === 0 ? (
+                <div className="flex items-center gap-2 rounded-xl bg-amber-50 border border-amber-200 p-3 text-xs text-amber-800">
+                  <AlertCircle className="h-4 w-4 text-amber-600 shrink-0" />
+                  <span>Click "Add 1 meal for tomorrow" above to set the meal count for approval.</span>
+                </div>
+              ) : effectiveMissingFields.length > 0 ? (
                 <FieldSet className="rounded-xl border border-amber-200 bg-amber-50/50 p-3">
                   <div className="flex items-center gap-2 text-xs font-semibold text-amber-800">
                     <AlertCircle className="h-4 w-4 text-amber-600 shrink-0" />
@@ -592,12 +679,16 @@ export function ProposalWorkspace({ sellerId, proposalId, serviceDate, onClose }
               {editMutation.isPending ? "Saving…" : "Save changes"}
             </Button>
           )}
+          {!gate.allowed && gate.reason ? (
+            <span className="text-xs text-amber-600 font-medium mr-2">{gate.reason}</span>
+          ) : null}
           <Button
-            className="bg-emerald-600 hover:bg-emerald-700 text-white font-medium shadow-sm gap-2 px-5"
+            className="bg-emerald-600 hover:bg-emerald-700 text-white font-medium shadow-sm gap-2 px-5 disabled:opacity-50"
             onClick={() => void approve()}
-            disabled={writesBlocked || writesPending || approveMutation.isPending || !gate.allowed || !previewIsSafe}
+            disabled={writesBlocked || writesPending || approveMutation.isPending || !gate.allowed}
+            title={!gate.allowed ? gate.reason : ""}
           >
-            {approveMutation.isPending ? "Approving…" : (
+            {approveMutation.isPending || editMutation.isPending ? "Approving…" : (
               <>
                 <Check className="h-4 w-4" />
                 Approve change

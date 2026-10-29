@@ -50,8 +50,8 @@ export function validateAiConfig(env: Environment = process.env): AiConfig {
     maxInputTokens: integer("AI_MAX_INPUT_TOKENS", 16000, 100000),
     maxSourceChars: integer("AI_MAX_SOURCE_CHARS", 8000, 8000),
     maxOutputChars: integer("AI_MAX_OUTPUT_CHARS", 12000, 32000),
-    stageTimeoutMs: integer("AI_STAGE_TIMEOUT_MS", 20000, 30000),
-    totalTimeoutMs: integer("AI_TOTAL_TIMEOUT_MS", 45000, 60000),
+    stageTimeoutMs: integer("AI_STAGE_TIMEOUT_MS", 35000, 60000),
+    totalTimeoutMs: integer("AI_TOTAL_TIMEOUT_MS", 75000, 120000),
   };
 }
 
