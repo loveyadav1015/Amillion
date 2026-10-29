@@ -93,6 +93,16 @@ function sanitizeLlmExtraction(raw: unknown, text: string): unknown {
       if (!("datePhrase" in c) || c.datePhrase === undefined) c.datePhrase = null;
       if (!("endDatePhrase" in c) || c.endDatePhrase === undefined) c.endDatePhrase = null;
       if (typeof c.quantity !== "number") c.quantity = null;
+      const validKinds = ["pause", "resume", "quantity_change", "recurring_change", "unsupported", "unclear"];
+      if (!validKinds.includes(c.kind)) {
+        if (typeof c.quantity === "number" && c.quantity > 0) {
+          c.kind = "quantity_change";
+        } else if (c.quantity === 0) {
+          c.kind = "pause";
+        } else {
+          c.kind = "unclear";
+        }
+      }
 
       if (Array.isArray(c.evidence)) {
         for (const ev of c.evidence) {
