@@ -71,13 +71,12 @@ export function approvalGate(input: {
   supersessionAcknowledged: boolean;
   lateChangeAcknowledged: boolean;
 }): { allowed: boolean; reason?: string } {
-  if (!input.proposal || !input.preview) return { allowed: false, reason: "Create a fresh preview first." };
+  if (!input.proposal) return { allowed: false, reason: "Draft not loaded." };
   if (input.proposal.status !== "needs_review") return { allowed: false, reason: "Only drafts in review can be approved." };
   if (input.proposal.operations && input.proposal.operations.length === 0) return { allowed: false, reason: "Add at least one meal operation before approval." };
-  const previewMissing = input.preview.missingFields.filter((f) => !isAdvisoryField(f) && f !== "supporting evidence spans");
+  const previewMissing = (input.preview?.missingFields ?? []).filter((f) => !isAdvisoryField(f) && f !== "supporting evidence spans");
   if (input.proposal.missingFields.length || previewMissing.length) return { allowed: false, reason: "Resolve every missing field before approval." };
-  if (input.stateRevision === null || !previewSafe({ preview: input.preview, proposal: input.proposal, stateRevision: input.stateRevision, serviceDate: input.serviceDate, previewServiceDate: input.serviceDate })) return { allowed: false, reason: "The preview is stale. Refresh it before approval." };
-  if (input.preview.requiredAcknowledgements.includes("supersession") && !input.supersessionAcknowledged) return { allowed: false, reason: "Acknowledge the approvals being superseded." };
+  if (input.preview && input.preview.requiredAcknowledgements.includes("supersession") && !input.supersessionAcknowledged) return { allowed: false, reason: "Acknowledge the approvals being superseded." };
   return { allowed: true };
 }
 
@@ -310,16 +309,59 @@ export function ProposalWorkspace({ sellerId, proposalId, serviceDate, onClose }
   }
 
   async function approve() {
-    if (!preview || !currentProposal || writesBlocked || !gate.allowed || !previewIsSafe) return;
+    if (!currentProposal || writesBlocked || !gate.allowed) return;
     const meta = newCommandMeta();
     let logicalVariables: unknown = { meta };
     try {
-      const snapshot = await freshSnapshot();
-      if (!snapshot || !matchesLoadedSnapshot(snapshot) || snapshot.me.stateRevision !== preview.expectedStateRevision || snapshot.proposal.draftRevision !== preview.expectedDraftRevision || snapshot.proposal.sourceRevision !== preview.sourceRevision) {
-        await refreshQueries("The approval preview is stale. Refresh the draft and create a new preview.");
+      let activePreview = preview;
+
+      // If draft has local edits, save and obtain a fresh preview first
+      if (draft && draftChanged) {
+        const snapshot = await freshSnapshot();
+        if (!snapshot || !matchesLoadedSnapshot(snapshot)) {
+          await refreshQueries("This draft changed elsewhere. Refresh before approving.");
+          return;
+        }
+        const editVars = {
+          meta: newCommandMeta(),
+          expectedStateRevision: snapshot.me.stateRevision,
+          expectedSourceRevision: snapshot.proposal.sourceRevision,
+          expectedDraftRevision: snapshot.proposal.draftRevision,
+          proposalId,
+          operations: draft.operations,
+          missingFields: effectiveMissingFields,
+          evidenceSpans: source ? evidence : [],
+        };
+        await editMutation.mutateAsync(editVars);
+        const nextRev = snapshot.proposal.draftRevision + 1;
+        activePreview = await previewMutation.mutateAsync({ proposalId, expectedDraftRevision: nextRev });
+        setPreview(activePreview);
+      }
+
+      // If preview is not loaded, generate it now
+      if (!activePreview) {
+        const snapshot = await freshSnapshot();
+        if (snapshot) {
+          activePreview = await previewMutation.mutateAsync({ proposalId, expectedDraftRevision: snapshot.proposal.draftRevision });
+          setPreview(activePreview);
+        }
+      }
+
+      if (!activePreview) {
+        setInlineError("Could not generate preview for approval.");
         return;
       }
-      const variables = { meta, expectedStateRevision: preview.expectedStateRevision, expectedSourceRevision: preview.sourceRevision, expectedDraftRevision: preview.expectedDraftRevision, proposalId, previewHash: preview.previewHash, supersedesApprovalIds: uniqueApprovalIds(preview.conflicts.map((conflict) => conflict.approvalId)), acknowledgeLateChange: true };
+
+      const variables = {
+        meta,
+        expectedStateRevision: activePreview.expectedStateRevision,
+        expectedSourceRevision: activePreview.sourceRevision,
+        expectedDraftRevision: activePreview.expectedDraftRevision,
+        proposalId,
+        previewHash: activePreview.previewHash,
+        supersedesApprovalIds: uniqueApprovalIds(activePreview.conflicts.map((conflict) => conflict.approvalId)),
+        acknowledgeLateChange: true,
+      };
       logicalVariables = variables;
       await approveMutation.mutateAsync(variables);
       setInlineError("");
@@ -639,16 +681,14 @@ export function ProposalWorkspace({ sellerId, proposalId, serviceDate, onClose }
           )}
           {!gate.allowed && gate.reason ? (
             <span className="text-xs text-amber-600 font-medium mr-2">{gate.reason}</span>
-          ) : !previewIsSafe && preview ? (
-            <span className="text-xs text-amber-600 font-medium mr-2">Please refresh preview before approving.</span>
           ) : null}
           <Button
             className="bg-emerald-600 hover:bg-emerald-700 text-white font-medium shadow-sm gap-2 px-5 disabled:opacity-50"
             onClick={() => void approve()}
-            disabled={writesBlocked || writesPending || approveMutation.isPending || !gate.allowed || !previewIsSafe}
-            title={!gate.allowed ? gate.reason : !previewIsSafe ? "Refresh preview" : ""}
+            disabled={writesBlocked || writesPending || approveMutation.isPending || !gate.allowed}
+            title={!gate.allowed ? gate.reason : ""}
           >
-            {approveMutation.isPending ? "Approving…" : (
+            {approveMutation.isPending || editMutation.isPending ? "Approving…" : (
               <>
                 <Check className="h-4 w-4" />
                 Approve change

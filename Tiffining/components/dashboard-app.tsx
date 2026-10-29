@@ -163,8 +163,8 @@ function DashboardContent({ auth }: { auth: Me }) {
       setConsentCustomerId(null);
       setSourceId(null);
 
-      if (result.state === "failed") {
-        toast.error(result.error?.message || "AI could not extract order changes from this message.");
+      if (result.state === "failed" || result.state === "unknown") {
+        toast.error(result.error?.message || "AI extraction timed out or could not complete. You can retry or review manually.");
       } else if (result.proposalIds && result.proposalIds.length > 0) {
         toast.success("AI draft ready! Opening for review…");
         setProposalId(result.proposalIds[0]);

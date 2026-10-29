@@ -195,3 +195,4 @@ Follow this exact script when recording your demo video for submission or presen
 | **Run Backend Smoke Test** | `pnpm test:backend` |
 | **Run NVIDIA AI Live Test** | `pnpm test:ai:live` |
 | **GitHub Repository** | `https://github.com/loveyadav1015/demeter` |
+
