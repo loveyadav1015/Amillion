@@ -30,7 +30,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { AuthState } from "@/components/auth-state";
+import { AuthState, useSellerAuth } from "@/components/auth-state";
 import { CustomersPanel, SettingsPanel as ManagementSettingsPanel } from "@/components/workspace-management";
 import { WhatsAppDialog } from "@/components/whatsapp-dialog";
 import { ProposalWorkspace } from "@/components/proposal-workspace";
@@ -114,6 +114,8 @@ function DashboardContent({ auth }: { auth: Me }) {
   const analyzeMutation = useMutation(analyzeSourceMutationOptions(queryClient, sellerId));
   const sourceDisposition = useMutation(sourceDispositionMutationOptions(queryClient, sellerId));
   const finalizeMutation = useMutation(finalizeSheetMutationOptions(queryClient, sellerId));
+  const liveAuth = useSellerAuth();
+  const currentRevision = liveAuth.data?.stateRevision ?? auth.stateRevision;
 
   const approvedRows = useMemo(() => (day.data?.rows ?? []).filter((row) => row.approvalId !== null), [day.data?.rows]);
   const approvedTotal = useMemo(() => approvedRows.reduce((total, row) => total + row.quantity, 0), [approvedRows]);
@@ -128,7 +130,7 @@ function DashboardContent({ auth }: { auth: Me }) {
     setIntakeError("");
     try {
       await importMutation.mutateAsync({
-        meta: newCommandMeta(), expectedStateRevision: auth.stateRevision,
+        meta: newCommandMeta(), expectedStateRevision: currentRevision,
         sources: [{ text: intakeText.trim(), sentAt: new Date(intakeSentAt).toISOString(), customerId: intakeCustomerId, channel: "manual", upstreamId: null }],
       });
       toast.success("Message added to review");
@@ -141,7 +143,7 @@ function DashboardContent({ auth }: { auth: Me }) {
     if (!target) return;
     try {
       const result = await analyzeMutation.mutateAsync({
-        meta: newCommandMeta(), expectedStateRevision: auth.stateRevision, expectedSourceRevision: target.revision,
+        meta: newCommandMeta(), expectedStateRevision: currentRevision, expectedSourceRevision: target.revision,
         expectedDraftRevisions: (proposals.data?.items ?? []).filter((proposal) => proposal.sourceId === target._id).map((proposal) => ({ proposalId: proposal._id, draftRevision: proposal.draftRevision })),
         consentAcknowledged: true, sourceId: target._id,
       });
@@ -162,7 +164,7 @@ function DashboardContent({ auth }: { auth: Me }) {
   async function dispositionSource(action: "dismiss" | "reopen" | "defer") {
     if (!selectedSource) return;
     try {
-      await sourceDisposition.mutateAsync({ meta: newCommandMeta(), expectedStateRevision: auth.stateRevision, expectedSourceRevision: selectedSource.revision, sourceId: selectedSource._id, action, ...(action === "defer" ? { serviceDate: selectedDate } : {}), reason: action === "dismiss" ? "Dismissed from seller review" : action === "defer" ? "Deferred for a later service date" : "Reopened for review" });
+      await sourceDisposition.mutateAsync({ meta: newCommandMeta(), expectedStateRevision: currentRevision, expectedSourceRevision: selectedSource.revision, sourceId: selectedSource._id, action, ...(action === "defer" ? { serviceDate: selectedDate } : {}), reason: action === "dismiss" ? "Dismissed from seller review" : action === "defer" ? "Deferred for a later service date" : "Reopened for review" });
       toast.success(`Source ${action === "dismiss" ? "dismissed" : action === "defer" ? "deferred" : "reopened"}`); setSourceId(null);
     } catch (error) { toast.error(safeError(error)); }
   }

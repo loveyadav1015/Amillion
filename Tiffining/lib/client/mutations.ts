@@ -31,7 +31,12 @@ export function actionMutationOptions<K extends ActionOperation>(
         await Promise.all(["listHistory", "getHistoryImport", "listForecasts", "getForecast", "getForecastByKey", "getReceipt"].map((read) => queryClient.invalidateQueries({ queryKey: [...sellerKey(sellerId), read] })));
         return;
       }
-      if (operation !== "previewProposal" && operation !== "previewInvoice") await queryClient.invalidateQueries({ queryKey: sellerKey(sellerId) });
+      if (operation !== "previewProposal" && operation !== "previewInvoice") {
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: sellerKey(sellerId) }),
+          queryClient.invalidateQueries({ queryKey: ["tiffining", "me"] }),
+        ]);
+      }
     },
   });
 }
