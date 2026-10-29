@@ -256,7 +256,7 @@ export function ProposalWorkspace({ sellerId, proposalId, serviceDate, onClose }
     ) return;
     void previewDraft();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentProposal?._id, currentProposal?.draftRevision, preview, effectiveMissingFields.length]);
+  }, [currentProposal?._id, currentProposal?.draftRevision, preview, effectiveMissingFields.length, draft !== null]);
 
   async function saveAndPreview() {
     if (!draft || !currentProposal || writesBlocked) return;
