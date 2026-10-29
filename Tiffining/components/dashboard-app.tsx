@@ -1,7 +1,6 @@
 "use client";
 
 /* Legacy component definitions remain available while the richer management panels own these tabs. */
-/* eslint-disable @typescript-eslint/no-unused-vars */
 
 import { useMemo, useState } from "react";
 import Image from "next/image";
@@ -145,21 +144,31 @@ function DashboardContent({ auth }: { auth: Me }) {
     if (!target) return;
     try {
       let expectedSourceRevision = target.revision;
+      let stateRevision = currentRevision;
+      let expectedDraftRevisions = (proposals.data?.items ?? [])
+        .filter((proposal) => proposal.sourceId === target._id)
+        .map((proposal) => ({ proposalId: proposal._id, draftRevision: proposal.draftRevision }));
+
       if (consentCustomerId && consentCustomerId !== target.customerId) {
-        await correctSourceMutation.mutateAsync({
+        const correctionResult = await correctSourceMutation.mutateAsync({
           meta: newCommandMeta(),
-          expectedStateRevision: auth.stateRevision,
+          expectedStateRevision: stateRevision,
           expectedSourceRevision: target.revision,
           sourceId: target._id,
           customerId: consentCustomerId,
           reason: "Customer assigned before AI analysis",
         });
         expectedSourceRevision += 1;
+        stateRevision = correctionResult.stateRevision;
+        expectedDraftRevisions = [];
       }
       const result = await analyzeMutation.mutateAsync({
-        meta: newCommandMeta(), expectedStateRevision: currentRevision, expectedSourceRevision: target.revision,
-        expectedDraftRevisions: (proposals.data?.items ?? []).filter((proposal) => proposal.sourceId === target._id).map((proposal) => ({ proposalId: proposal._id, draftRevision: proposal.draftRevision })),
-        consentAcknowledged: true, sourceId: target._id,
+        meta: newCommandMeta(),
+        expectedStateRevision: stateRevision,
+        expectedSourceRevision,
+        expectedDraftRevisions,
+        consentAcknowledged: true,
+        sourceId: target._id,
       });
       setConsentSourceId(null);
       setConsentCustomerId(null);

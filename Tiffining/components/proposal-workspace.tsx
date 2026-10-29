@@ -1,7 +1,6 @@
 "use client";
 
 /* The compact indexed editor intentionally uses expression handlers inside its field list. */
-/* eslint-disable @typescript-eslint/no-unused-expressions */
 
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -177,7 +176,7 @@ export function ProposalWorkspace({ sellerId, proposalId, serviceDate, onClose }
   const previewIsSafe = Boolean(preview && currentProposal && stateRevisionAtPreview !== null && previewServiceDate === serviceDate && previewSafe({ preview, proposal: currentProposal, stateRevision: stateRevisionAtPreview, serviceDate, previewServiceDate: previewServiceDate ?? serviceDate }));
   
   const gate = approvalGate({
-    preview: preview ? { ...preview, missingFields: preview.missingFields.filter((f) => !isAdvisoryField(f)) } : null,
+    preview: preview ? { ...preview, missingFields: preview.missingFields.filter((f) => !isAdvisoryField(f) && !resolvedFields.has(f)) } : null,
     proposal: currentProposal ? { ...currentProposal, operations: draft?.operations ?? currentProposal.operations, missingFields: effectiveMissingFields } : null,
     stateRevision: stateRevisionAtPreview,
     serviceDate,
@@ -276,7 +275,9 @@ export function ProposalWorkspace({ sellerId, proposalId, serviceDate, onClose }
       quantity: 1,
     };
     const defaultSpans = source && source.text.length > 0 ? [{ start: 0, end: source.text.length }] : [];
-    setDraft({ ...draft, operations: [newOp], evidenceSpans: defaultSpans });
+    const remainingMissing = (draft.missingFields ?? []).filter((f) => f !== "operations" && f !== "explicit_quantity");
+    setDraft({ ...draft, operations: [newOp], evidenceSpans: defaultSpans, missingFields: remainingMissing });
+    setResolvedFields((prev) => new Set([...prev, "operations", "explicit_quantity"]));
     setSelectedOperation(0);
     setPreview(null);
   }
@@ -315,13 +316,14 @@ export function ProposalWorkspace({ sellerId, proposalId, serviceDate, onClose }
     try {
       let activePreview = preview;
 
+      const snapshot = await freshSnapshot();
+      if (!snapshot || !matchesLoadedSnapshot(snapshot)) {
+        await refreshQueries("This draft changed elsewhere. Refresh before approving.");
+        return;
+      }
+
       // If draft has local edits, save and obtain a fresh preview first
       if (draft && draftChanged) {
-        const snapshot = await freshSnapshot();
-        if (!snapshot || !matchesLoadedSnapshot(snapshot)) {
-          await refreshQueries("This draft changed elsewhere. Refresh before approving.");
-          return;
-        }
         const editVars = {
           meta: newCommandMeta(),
           expectedStateRevision: snapshot.me.stateRevision,
@@ -336,15 +338,10 @@ export function ProposalWorkspace({ sellerId, proposalId, serviceDate, onClose }
         const nextRev = snapshot.proposal.draftRevision + 1;
         activePreview = await previewMutation.mutateAsync({ proposalId, expectedDraftRevision: nextRev });
         setPreview(activePreview);
-      }
-
-      // If preview is not loaded, generate it now
-      if (!activePreview) {
-        const snapshot = await freshSnapshot();
-        if (snapshot) {
-          activePreview = await previewMutation.mutateAsync({ proposalId, expectedDraftRevision: snapshot.proposal.draftRevision });
-          setPreview(activePreview);
-        }
+      } else if (!activePreview || activePreview.expectedStateRevision !== snapshot.me.stateRevision) {
+        // If preview is not loaded or state revision moved ahead, generate a fresh preview
+        activePreview = await previewMutation.mutateAsync({ proposalId, expectedDraftRevision: snapshot.proposal.draftRevision });
+        setPreview(activePreview);
       }
 
       if (!activePreview) {
